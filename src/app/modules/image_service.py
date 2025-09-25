@@ -15,12 +15,14 @@ class ImageService:
 
     def __init__(self, db_service):
         self.db_service = db_service
-        self.session: Optional[aiohttp.ClientSession] = None
+        self.session = None
 
     async def __aenter__(self):
         """异步上下文管理器入口"""
+        # 创建aiohttp session
+        timeout = aiohttp.ClientTimeout(total=30)
         self.session = aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=30),
+            timeout=timeout,
             headers={
                 "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
             },
@@ -28,15 +30,19 @@ class ImageService:
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """异步上下文管理器退出"""
+        """异步上下文管理器出口"""
         if self.session:
             await self.session.close()
 
     async def download_and_store_images(
         self, product_id: str, scraped_data: ScrapedProduct
     ) -> Dict[str, Any]:
-        """下载并存储产品图片到Supabase Storage"""
-        results = {"hero_image": None, "gallery_images": [], "errors": []}
+        """下载并存储产品的所有图片"""
+        results = {
+            "hero_image": None,
+            "gallery_images": [],
+            "errors": [],
+        }
 
         try:
             # 下载主图
@@ -48,40 +54,44 @@ class ImageService:
                     "hero",
                     0,
                 )
+
                 if hero_result["success"]:
                     results["hero_image"] = hero_result
-                    # 更新产品表的hero_image_path
-                    await self._update_product_hero_image_path(
-                        product_id, hero_result["storage_path"]
-                    )
                 else:
                     results["errors"].append(
                         f"Hero image download failed: {hero_result['error']}"
                     )
 
             # 下载轮播图
-            for i, img_data in enumerate(scraped_data.gallery_images):
-                if isinstance(img_data, dict) and "url" in img_data:
-                    img_url = img_data["url"]
-                elif isinstance(img_data, str):
-                    img_url = img_data
-                else:
-                    continue
+            if scraped_data.gallery_images:
+                for i, gallery_item in enumerate(scraped_data.gallery_images):
+                    # 修复：从字典中提取URL
+                    if isinstance(gallery_item, dict):
+                        gallery_url = gallery_item.get("url")
+                        position = gallery_item.get("position", i + 1)
+                    else:
+                        # 如果是字符串，直接使用
+                        gallery_url = gallery_item
+                        position = i + 1
 
-                gallery_result = await self._download_and_upload_image(
-                    img_url,
-                    scraped_data.asin,
-                    scraped_data.marketplace,
-                    "gallery",
-                    i + 1,
-                )
+                    if not gallery_url:
+                        results["errors"].append(f"Gallery image {i+1}: No URL found")
+                        continue
 
-                if gallery_result["success"]:
-                    results["gallery_images"].append(gallery_result)
-                else:
-                    results["errors"].append(
-                        f"Gallery image {i+1} download failed: {gallery_result['error']}"
+                    gallery_result = await self._download_and_upload_image(
+                        gallery_url,
+                        scraped_data.asin,
+                        scraped_data.marketplace,
+                        "gallery",
+                        position,
                     )
+
+                    if gallery_result["success"]:
+                        results["gallery_images"].append(gallery_result)
+                    else:
+                        results["errors"].append(
+                            f"Gallery image {i+1} download failed: {gallery_result['error']}"
+                        )
 
             # 更新数据库中的storage_path
             await self._update_image_storage_paths(product_id, results)
@@ -135,69 +145,89 @@ class ImageService:
     async def _download_image(self, url: str) -> Optional[bytes]:
         """下载图片数据"""
         try:
-            # 处理Amazon图片URL，获取高清版本
+            # 转换为高分辨率URL
             high_res_url = self._get_high_resolution_url(url)
 
             async with self.session.get(high_res_url) as response:
                 if response.status == 200:
-                    content_type = response.headers.get("content-type", "")
-                    if content_type.startswith("image/"):
-                        return await response.read()
-                    else:
-                        # 如果不是图片，尝试原始URL
+                    return await response.read()
+                else:
+                    # 如果高分辨率URL失败，尝试原始URL
+                    if high_res_url != url:
                         async with self.session.get(url) as fallback_response:
                             if fallback_response.status == 200:
                                 return await fallback_response.read()
-                return None
+                    return None
+
         except Exception as e:
             print(f"Error downloading image {url}: {e}")
             return None
 
     def _get_high_resolution_url(self, url: str) -> str:
-        """将Amazon图片URL转换为高清版本"""
-        # Amazon图片URL模式替换
-        replacements = [
-            ("_SS40_", "_SL1500_"),
-            ("_SS50_", "_SL1500_"),
-            ("_SS75_", "_SL1500_"),
-            ("_SS100_", "_SL1500_"),
-            ("_SS200_", "_SL1500_"),
-            ("_SS300_", "_SL1500_"),
-            ("_AC_SX40_", "_AC_SL1500_"),
-            ("_AC_SX50_", "_AC_SL1500_"),
-            ("_AC_SX75_", "_AC_SL1500_"),
-            ("_AC_SX100_", "_AC_SL1500_"),
-            ("_AC_SX200_", "_AC_SL1500_"),
-            ("_AC_SX300_", "_AC_SL1500_"),
-        ]
+        """将Amazon图片URL转换为高分辨率版本"""
+        try:
+            # Amazon图片URL通常包含尺寸参数，我们可以替换为更大的尺寸
+            # 例如：https://m.media-amazon.com/images/I/71abc123._AC_SL1500_.jpg
+            # 可以替换为：https://m.media-amazon.com/images/I/71abc123._AC_SL2000_.jpg
 
-        high_res_url = url
-        for old, new in replacements:
-            if old in high_res_url:
-                high_res_url = high_res_url.replace(old, new)
-                break
+            if "amazon" in url and "._AC_" in url:
+                # 替换为更大的尺寸
+                url = url.replace("._AC_SL1500_", "._AC_SL2000_")
+                url = url.replace("._AC_SL1000_", "._AC_SL2000_")
+                url = url.replace("._AC_SL500_", "._AC_SL2000_")
+                url = url.replace("._AC_SX", "._AC_SL2000_")
+                url = url.replace("._AC_SY", "._AC_SL2000_")
 
-        return high_res_url
+                # 如果没有尺寸参数，添加高分辨率参数
+                if "._AC_" in url and not any(x in url for x in ["_SL", "_SX", "_SY"]):
+                    url = url.replace("._AC_", "._AC_SL2000_")
+
+            return url
+
+        except Exception:
+            return url
 
     def _get_file_extension(self, url: str) -> str:
         """从URL获取文件扩展名"""
-        parsed = urlparse(url)
-        path = parsed.path.lower()
+        try:
+            parsed_url = urlparse(url)
+            path = parsed_url.path.lower()
 
-        if path.endswith(".jpg") or path.endswith(".jpeg"):
+            # 常见的图片扩展名
+            if ".jpg" in path or ".jpeg" in path:
+                return ".jpg"
+            elif ".png" in path:
+                return ".png"
+            elif ".webp" in path:
+                return ".webp"
+            elif ".gif" in path:
+                return ".gif"
+            else:
+                # 默认使用jpg
+                return ".jpg"
+        except Exception:
             return ".jpg"
-        elif path.endswith(".png"):
-            return ".png"
-        elif path.endswith(".webp"):
-            return ".webp"
-        else:
-            return ".jpg"  # 默认使用jpg
+
+    def _get_content_type(self, file_extension: str) -> str:
+        """根据文件扩展名获取content-type"""
+        content_types = {
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".png": "image/png",
+            ".webp": "image/webp",
+            ".gif": "image/gif",
+        }
+        return content_types.get(file_extension.lower(), "image/jpeg")
 
     async def _upload_to_supabase_storage(
         self, storage_path: str, image_data: bytes
     ) -> bool:
         """上传图片到Supabase Storage"""
         try:
+            # 获取文件扩展名和content-type
+            file_extension = Path(storage_path).suffix
+            content_type = self._get_content_type(file_extension)
+
             # 使用Supabase客户端上传文件
             result = self.db_service.client.storage.from_(
                 settings.STORAGE_BUCKET
@@ -205,8 +235,8 @@ class ImageService:
                 path=storage_path,
                 file=image_data,
                 file_options={
-                    "content-type": "image/jpeg",
-                    "upsert": True,  # 如果文件已存在则覆盖
+                    "content-type": content_type,
+                    "upsert": "true",  # 修复：使用字符串而不是布尔值
                 },
             )
 
@@ -233,22 +263,22 @@ class ImageService:
     async def _update_image_storage_paths(
         self, product_id: str, results: Dict[str, Any]
     ):
-        """更新图片表中的storage_path字段"""
+        """更新数据库中的图片存储路径"""
         try:
-            # 更新主图
-            if results["hero_image"] and results["hero_image"]["success"]:
-                self.db_service.client.table("amazon_product_images").update(
-                    {"storage_path": results["hero_image"]["storage_path"]}
-                ).eq("product_id", product_id).eq("role", "hero").execute()
+            # 更新主图路径
+            if results["hero_image"]:
+                await self._update_product_hero_image_path(
+                    product_id, results["hero_image"]["storage_path"]
+                )
 
-            # 更新轮播图
-            for gallery_img in results["gallery_images"]:
-                if gallery_img["success"]:
-                    self.db_service.client.table("amazon_product_images").update(
-                        {"storage_path": gallery_img["storage_path"]}
-                    ).eq("product_id", product_id).eq("role", "gallery").eq(
-                        "position", gallery_img["position"]
-                    ).execute()
+            # 更新轮播图路径
+            for gallery_image in results["gallery_images"]:
+                # 查找对应的图片记录并更新storage_path
+                self.db_service.client.table("amazon_product_images").update(
+                    {"storage_path": gallery_image["storage_path"]}
+                ).eq("product_id", product_id).eq(
+                    "original_url", gallery_image["original_url"]
+                ).execute()
 
         except Exception as e:
             print(f"Error updating image storage paths: {e}")

@@ -19,7 +19,7 @@ async def test_api():
 
         # Test single ASIN scraping
         print("\nTesting single ASIN scraping...")
-        test_asin = "B0CGJJJC4M"  # Example ASIN
+        test_asin = "B0C59CLN29"  # Example ASIN
         async with session.get(f"{base_url}/asin/{test_asin}?wait=true") as resp:
             print(f"Single ASIN: {resp.status}")
             if resp.status == 200:

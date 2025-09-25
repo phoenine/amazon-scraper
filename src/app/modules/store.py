@@ -1,7 +1,7 @@
 import uuid
 import hashlib
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict, Any
 from supabase import create_client, Client
 
@@ -347,7 +347,8 @@ class DatabaseService:
         last_scraped = datetime.fromisoformat(
             result.data[0]["last_scraped_at"].replace("Z", "+00:00")
         )
-        ttl_threshold = datetime.utcnow() - timedelta(
+
+        ttl_threshold = datetime.now(timezone.utc) - timedelta(
             seconds=settings.SCRAPER_TTL_SECONDS
         )
 

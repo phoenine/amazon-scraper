@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from playwright.async_api import async_playwright, Browser, BrowserContext
 
@@ -115,7 +115,14 @@ class ScraperService:
 
         # Check if data is stale
         if product.last_scraped_at:
-            age = datetime.utcnow() - product.last_scraped_at
+            if product.last_scraped_at.tzinfo is None:
+                # 如果没有时区信息，假设是UTC
+                last_scraped = product.last_scraped_at.replace(tzinfo=timezone.utc)
+            else:
+                last_scraped = product.last_scraped_at
+
+            current_time = datetime.now(timezone.utc)
+            age = current_time - last_scraped
             return age.total_seconds() > settings.SCRAPER_TTL_SECONDS
 
         return True
