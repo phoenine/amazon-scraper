@@ -1,0 +1,328 @@
+import re
+import json
+import logging
+from typing import Optional, List, Dict, Any
+from playwright.async_api import Page
+
+from .models import ScrapedProduct, ProductAttribute, AttributeSourceEnum
+
+logger = logging.getLogger(__name__)
+
+
+class AmazonParser:
+    """Amazon product page parser"""
+
+    def __init__(self, marketplace: str = "amazon.com"):
+        self.marketplace = marketplace
+        self.selectors = self._get_selectors_for_marketplace(marketplace)
+
+    def _get_selectors_for_marketplace(self, marketplace: str) -> Dict[str, str]:
+        """Get CSS selectors based on marketplace"""
+        # Base selectors for amazon.com
+        base_selectors = {
+            "title": "#productTitle",
+            "rating": "#acrPopover",
+            "ratings_count": "#acrCustomerReviewText",
+            "price": ".a-price .a-offscreen, #corePrice_feature_div .a-offscreen",
+            "hero_image": "#imgTagWrapperId img",
+            "gallery_images": "#altImages img",
+            "bullets": "#feature-bullets ul li span",
+            "availability": "#availability span",
+            "tech_details": "#productDetails_techSpec_section_1 tr",
+            "product_details": "#productDetails_detailBullets_sections1 tr, #detailBullets_feature_div tr",
+        }
+
+        # Marketplace-specific adjustments
+        if marketplace == "amazon.co.jp":
+            base_selectors.update(
+                {
+                    "price": ".a-price .a-offscreen, #corePrice_desktop .a-offscreen",
+                }
+            )
+        elif marketplace == "amazon.de":
+            base_selectors.update(
+                {
+                    "availability": "#availability span, #availability-brief",
+                }
+            )
+
+        return base_selectors
+
+    async def parse_product(self, page: Page, asin: str) -> ScrapedProduct:
+        """Parse product page and extract all information"""
+        logger.info(f"Parsing product {asin} from {self.marketplace}")
+
+        try:
+            # Wait for page to load
+            await page.wait_for_load_state("domcontentloaded")
+            await page.wait_for_timeout(2000)  # Additional wait for dynamic content
+
+            # Extract all product information
+            title = await self._extract_title(page)
+            rating, ratings_count = await self._extract_rating_info(page)
+            price_amount, price_currency = await self._extract_price(page)
+            hero_image_url = await self._extract_hero_image(page)
+            availability = await self._extract_availability(page)
+            bullets = await self._extract_bullets(page)
+            gallery_images = await self._extract_gallery_images(page)
+            attributes = await self._extract_attributes(page)
+            best_sellers_rank = await self._extract_bsr(page)
+
+            # Get raw HTML for debugging (optional)
+            raw_html = await page.content()
+
+            return ScrapedProduct(
+                asin=asin,
+                marketplace=self.marketplace,
+                title=title,
+                rating=rating,
+                ratings_count=ratings_count,
+                price_amount=price_amount,
+                price_currency=price_currency,
+                hero_image_url=hero_image_url,
+                availability=availability,
+                bullets=bullets,
+                gallery_images=gallery_images,
+                attributes=attributes,
+                best_sellers_rank=best_sellers_rank,
+                raw_html=raw_html[:10000] if raw_html else None,  # Limit size
+            )
+
+        except Exception as e:
+            logger.error(f"Error parsing product {asin}: {str(e)}")
+            raise
+
+    async def _safe_text(self, page: Page, selector: str) -> Optional[str]:
+        """Safely extract text from element"""
+        try:
+            element = await page.query_selector(selector)
+            if element:
+                text = await element.text_content()
+                return " ".join(text.split()) if text else None
+        except Exception as e:
+            logger.debug(f"Error extracting text with selector '{selector}': {e}")
+        return None
+
+    async def _safe_attribute(
+        self, page: Page, selector: str, attribute: str
+    ) -> Optional[str]:
+        """Safely extract attribute from element"""
+        try:
+            element = await page.query_selector(selector)
+            if element:
+                return await element.get_attribute(attribute)
+        except Exception as e:
+            logger.debug(
+                f"Error extracting attribute '{attribute}' with selector '{selector}': {e}"
+            )
+        return None
+
+    async def _extract_title(self, page: Page) -> Optional[str]:
+        """Extract product title"""
+        title = await self._safe_text(page, self.selectors["title"])
+        return title.strip() if title else None
+
+    async def _extract_rating_info(
+        self, page: Page
+    ) -> tuple[Optional[float], Optional[int]]:
+        """Extract rating and ratings count"""
+        rating = None
+        ratings_count = None
+
+        # Extract rating
+        rating_text = await self._safe_text(page, self.selectors["rating"])
+        if rating_text:
+            # Try to extract rating from text like "4.6 out of 5 stars"
+            rating_match = re.search(r"(\d+\.?\d*)\s*out\s*of\s*5", rating_text)
+            if rating_match:
+                try:
+                    rating = float(rating_match.group(1))
+                except ValueError:
+                    pass
+
+        # Extract ratings count
+        ratings_text = await self._safe_text(page, self.selectors["ratings_count"])
+        if ratings_text:
+            # Extract number from text like "1,234 ratings"
+            count_match = re.search(r"([\d,]+)", ratings_text.replace(",", ""))
+            if count_match:
+                try:
+                    ratings_count = int(count_match.group(1).replace(",", ""))
+                except ValueError:
+                    pass
+
+        return rating, ratings_count
+
+    async def _extract_price(self, page: Page) -> tuple[Optional[float], Optional[str]]:
+        """Extract price amount and currency"""
+        price_text = await self._safe_text(page, self.selectors["price"])
+        if not price_text:
+            return None, None
+
+        # Try to extract price and currency
+        # Common patterns: $19.99, €25.50, ¥1,234, £15.99
+        price_match = re.search(r"([€$£¥]?)\s*([\d,]+\.?\d*)\s*([A-Z]{3})?", price_text)
+        if price_match:
+            currency_symbol = price_match.group(1)
+            amount_str = price_match.group(2).replace(",", "")
+            currency_code = price_match.group(3)
+
+            try:
+                amount = float(amount_str)
+
+                # Determine currency
+                currency = currency_code
+                if not currency:
+                    if currency_symbol == "$":
+                        currency = "USD"
+                    elif currency_symbol == "€":
+                        currency = "EUR"
+                    elif currency_symbol == "£":
+                        currency = "GBP"
+                    elif currency_symbol == "¥":
+                        currency = (
+                            "JPY" if self.marketplace == "amazon.co.jp" else "CNY"
+                        )
+
+                return amount, currency
+            except ValueError:
+                pass
+
+        return None, None
+
+    async def _extract_hero_image(self, page: Page) -> Optional[str]:
+        """Extract hero image URL"""
+        # Try high-resolution image first
+        hero_url = await self._safe_attribute(
+            page, self.selectors["hero_image"], "data-old-hires"
+        )
+        if not hero_url:
+            hero_url = await self._safe_attribute(
+                page, self.selectors["hero_image"], "src"
+            )
+
+        # Clean up URL and get high-res version
+        if hero_url:
+            # Replace small image indicators with large ones
+            hero_url = re.sub(r"_S[SX]\d+_", "_SL1500_", hero_url)
+            hero_url = re.sub(r"\._.*?\.", ".", hero_url)
+
+        return hero_url
+
+    async def _extract_availability(self, page: Page) -> Optional[str]:
+        """Extract availability information"""
+        availability = await self._safe_text(page, self.selectors["availability"])
+        return availability.strip() if availability else None
+
+    async def _extract_bullets(self, page: Page) -> List[str]:
+        """Extract bullet points"""
+        bullets = []
+        try:
+            bullet_elements = await page.query_selector_all(self.selectors["bullets"])
+            for element in bullet_elements:
+                text = await element.text_content()
+                if text:
+                    cleaned_text = " ".join(text.split()).strip()
+                    if (
+                        cleaned_text and len(cleaned_text) > 10
+                    ):  # Filter out short/empty bullets
+                        bullets.append(cleaned_text)
+        except Exception as e:
+            logger.debug(f"Error extracting bullets: {e}")
+
+        return bullets[:5]  # Limit to 5 bullets as per requirement
+
+    async def _extract_gallery_images(self, page: Page) -> List[Dict[str, Any]]:
+        """Extract gallery images"""
+        gallery = []
+        try:
+            image_elements = await page.query_selector_all(
+                self.selectors["gallery_images"]
+            )
+            for idx, element in enumerate(image_elements):
+                src = await element.get_attribute("src")
+                if src:
+                    # Convert to high-res version
+                    high_res_src = re.sub(r"_S[SX]\d+_", "_SL1500_", src)
+                    gallery.append(
+                        {"url": high_res_src, "position": idx + 1, "role": "gallery"}
+                    )
+        except Exception as e:
+            logger.debug(f"Error extracting gallery images: {e}")
+
+        return gallery[:10]  # Limit gallery images
+
+    async def _extract_attributes(self, page: Page) -> List[ProductAttribute]:
+        """Extract product attributes from tech details and product information"""
+        attributes = []
+
+        # Extract from tech details
+        await self._extract_attributes_from_section(
+            page,
+            self.selectors["tech_details"],
+            AttributeSourceEnum.TECH_DETAILS,
+            attributes,
+        )
+
+        # Extract from product details
+        await self._extract_attributes_from_section(
+            page,
+            self.selectors["product_details"],
+            AttributeSourceEnum.PRODUCT_INFORMATION,
+            attributes,
+        )
+
+        return attributes
+
+    async def _extract_attributes_from_section(
+        self,
+        page: Page,
+        selector: str,
+        source: AttributeSourceEnum,
+        attributes: List[ProductAttribute],
+    ):
+        """Extract attributes from a specific section"""
+        try:
+            rows = await page.query_selector_all(selector)
+            for row in rows:
+                cells = await row.query_selector_all("td")
+                if len(cells) >= 2:
+                    name_element = cells[0]
+                    value_element = cells[1]
+
+                    name = await name_element.text_content()
+                    value = await value_element.text_content()
+
+                    if name and value:
+                        name = " ".join(name.split()).strip()
+                        value = " ".join(value.split()).strip()
+
+                        if name and value:
+                            attributes.append(
+                                ProductAttribute(name=name, value=value, source=source)
+                            )
+        except Exception as e:
+            logger.debug(f"Error extracting attributes from {source}: {e}")
+
+    async def _extract_bsr(self, page: Page) -> Optional[Dict[str, Any]]:
+        """Extract Best Sellers Rank information"""
+        bsr_data = {}
+        try:
+            # Look for BSR in product details
+            bsr_text = await self._safe_text(
+                page, "#SalesRank, #detailBulletsWrapper_feature_div"
+            )
+            if bsr_text and "Best Sellers Rank" in bsr_text:
+                # Parse BSR text to extract rankings
+                rank_matches = re.findall(r"#([\d,]+)\s+in\s+([^(]+)", bsr_text)
+                for rank, category in rank_matches:
+                    try:
+                        rank_num = int(rank.replace(",", ""))
+                        category_clean = category.strip()
+                        bsr_data[category_clean] = rank_num
+                    except ValueError:
+                        continue
+        except Exception as e:
+            logger.debug(f"Error extracting BSR: {e}")
+
+        return bsr_data if bsr_data else None
