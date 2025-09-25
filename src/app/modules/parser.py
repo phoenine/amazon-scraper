@@ -20,10 +20,13 @@ class AmazonParser:
         """Get CSS selectors based on marketplace"""
         # Base selectors for amazon.com
         base_selectors = {
-            "title": "#productTitle",
+            "title": "#titleSection",
             "rating": "#acrPopover",
             "ratings_count": "#acrCustomerReviewText",
-            "price": ".a-price .a-offscreen, #corePrice_feature_div .a-offscreen",
+            "price": ".a-price .a-offscreen, .a-price",
+            "price_symbol": ".a-price .a-price-symbol",
+            "price_whole": ".a-price .a-price-whole",
+            "price_fraction": ".a-price .a-price-fraction",
             "hero_image": "#imgTagWrapperId img",
             "gallery_images": "#altImages img",
             "bullets": "#feature-bullets ul li span",
@@ -143,50 +146,54 @@ class AmazonParser:
         # Extract ratings count
         ratings_text = await self._safe_text(page, self.selectors["ratings_count"])
         if ratings_text:
-            # Extract number from text like "1,234 ratings"
-            count_match = re.search(r"([\d,]+)", ratings_text.replace(",", ""))
+            count_match = re.search(r"([\d,]+)", ratings_text)
             if count_match:
                 try:
                     ratings_count = int(count_match.group(1).replace(",", ""))
                 except ValueError:
                     pass
-
         return rating, ratings_count
 
     async def _extract_price(self, page: Page) -> tuple[Optional[float], Optional[str]]:
-        """Extract price amount and currency"""
-        price_text = await self._safe_text(page, self.selectors["price"])
-        if not price_text:
-            return None, None
+        """Extract price amount and currency (simple, no prints)."""
 
-        # Try to extract price and currency
-        # Common patterns: $19.99, €25.50, ¥1,234, £15.99
-        price_match = re.search(r"([€$£¥]?)\s*([\d,]+\.?\d*)\s*([A-Z]{3})?", price_text)
-        if price_match:
-            currency_symbol = price_match.group(1)
-            amount_str = price_match.group(2).replace(",", "")
-            currency_code = price_match.group(3)
+        symbol_map = {
+            "$": "USD",
+            "€": "EUR",
+            "£": "GBP",
+            "¥": "JPY" if self.marketplace == "amazon.co.jp" else "CNY",
+            "S$": "SGD",
+        }
 
-            try:
-                amount = float(amount_str)
+        price_text = await self._safe_text(page, self.selectors.get("price", ""))
+        if price_text:
+            m = re.search(r"([€$£¥]|S\$)?\s*([\d,]+\.?\d*)\s*([A-Z]{3})?", price_text)
+            if m:
+                sym, num, code = m.group(1), m.group(2), m.group(3)
+                try:
+                    amount = float(num.replace(",", ""))
+                    currency = code or symbol_map.get(sym)
+                    return amount, currency
+                except ValueError:
+                    pass
 
-                # Determine currency
-                currency = currency_code
-                if not currency:
-                    if currency_symbol == "$":
-                        currency = "USD"
-                    elif currency_symbol == "€":
-                        currency = "EUR"
-                    elif currency_symbol == "£":
-                        currency = "GBP"
-                    elif currency_symbol == "¥":
-                        currency = (
-                            "JPY" if self.marketplace == "amazon.co.jp" else "CNY"
-                        )
+        try:
+            currency_symbol = await self._safe_text(page, self.selectors.get("price_symbol", ""))
+            price_whole = await self._safe_text(page, self.selectors.get("price_whole", ""))
+            price_fraction = await self._safe_text(page, self.selectors.get("price_fraction", ""))
 
-                return amount, currency
-            except ValueError:
-                pass
+            if price_whole:
+                num = price_whole.replace(",", "").strip()
+                if price_fraction:
+                    num = f"{num}.{price_fraction.strip()}"
+                try:
+                    amount = float(num)
+                    currency = symbol_map.get(currency_symbol)
+                    return amount, currency
+                except ValueError:
+                    pass
+        except Exception as e:
+            logger.debug(f"Error extracting price from components: {e}")
 
         return None, None
 
