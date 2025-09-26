@@ -41,6 +41,7 @@ class ImageService:
         results = {
             "hero_image": None,
             "gallery_images": [],
+            "aplus_images": [],  # 新增A+图片结果
             "errors": [],
         }
 
@@ -93,6 +94,22 @@ class ImageService:
                             f"Gallery image {i+1} download failed: {gallery_result['error']}"
                         )
 
+            # 下载A+图片
+            if scraped_data.aplus_images:
+                for aplus_img in scraped_data.aplus_images:
+                    aplus_result = await self._download_and_upload_aplus_image(
+                        aplus_img,
+                        scraped_data.asin,
+                        scraped_data.marketplace,
+                    )
+
+                    if aplus_result["success"]:
+                        results["aplus_images"].append(aplus_result)
+                    else:
+                        results["errors"].append(
+                            f"A+ image download failed: {aplus_result['error']}"
+                        )
+
             # 更新数据库中的storage_path
             await self._update_image_storage_paths(product_id, results)
 
@@ -100,6 +117,47 @@ class ImageService:
             results["errors"].append(f"General error: {str(e)}")
 
         return results
+
+    async def _download_and_upload_aplus_image(
+        self, aplus_img, asin: str, marketplace: str
+    ) -> Dict[str, Any]:
+        """下载A+图片并上传到Supabase Storage"""
+        try:
+            # 下载图片
+            image_data = await self._download_image(aplus_img.original_url)
+            if not image_data:
+                return {"success": False, "error": "Failed to download A+ image"}
+
+            # 生成存储路径
+            file_extension = self._get_file_extension(aplus_img.original_url)
+            etag = hashlib.md5(image_data).hexdigest()[:8]
+
+            # A+图片路径格式: aplus_{section}_{position}_{etag}.jpg
+            section = aplus_img.content_section or "unknown"
+            storage_path = f"{marketplace}/{asin}/aplus_{section}_{aplus_img.position}_{etag}{file_extension}"
+
+            # 上传到Supabase Storage
+            upload_success = await self._upload_to_supabase_storage(
+                storage_path, image_data
+            )
+
+            if upload_success:
+                return {
+                    "success": True,
+                    "storage_path": storage_path,
+                    "original_url": aplus_img.original_url,
+                    "content_section": aplus_img.content_section,
+                    "position": aplus_img.position,
+                    "size": len(image_data),
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": "Failed to upload A+ image to storage",
+                }
+
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
     async def _download_and_upload_image(
         self, image_url: str, asin: str, marketplace: str, role: str, position: int
@@ -117,9 +175,14 @@ class ImageService:
 
             if role == "hero":
                 storage_path = f"{marketplace}/{asin}/hero_{etag}{file_extension}"
-            else:
+            elif role == "gallery":
                 storage_path = (
                     f"{marketplace}/{asin}/gallery_{position}_{etag}{file_extension}"
+                )
+            else:
+                # 其他类型图片的默认处理
+                storage_path = (
+                    f"{marketplace}/{asin}/{role}_{position}_{etag}{file_extension}"
                 )
 
             # 上传到Supabase Storage
@@ -278,6 +341,14 @@ class ImageService:
                     {"storage_path": gallery_image["storage_path"]}
                 ).eq("product_id", product_id).eq(
                     "original_url", gallery_image["original_url"]
+                ).execute()
+
+            # 更新A+图片路径
+            for aplus_image in results["aplus_images"]:
+                self.db_service.client.table("amazon_aplus_images").update(
+                    {"storage_path": aplus_image["storage_path"], "status": "stored"}
+                ).eq("product_id", product_id).eq(
+                    "original_url", aplus_image["original_url"]
                 ).execute()
 
         except Exception as e:

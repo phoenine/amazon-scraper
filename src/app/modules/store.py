@@ -80,17 +80,7 @@ class DatabaseService:
                 else:
                     gallery.append(img_info)
 
-            # Get attributes
-            attrs_result = (
-                self.client.table("amazon_product_attributes")
-                .select("*")
-                .eq("product_id", product_id)
-                .execute()
-            )
-            attributes = [
-                {"name": attr["name"], "value": attr["value"], "source": attr["source"]}
-                for attr in attrs_result.data
-            ]
+            # 删除 attributes 查询逻辑
 
             # Get A+ content
             aplus_content = None
@@ -100,13 +90,17 @@ class DatabaseService:
                 .eq("product_id", product_id)
                 .execute()
             )
-            
+
             if aplus_content_result.data:
                 aplus_data = aplus_content_result.data[0]
                 aplus_content = AplusContent(
                     brand_story=aplus_data["brand_story"],
                     faq=json.loads(aplus_data["faq"]) if aplus_data["faq"] else None,
-                    product_information=json.loads(aplus_data["product_information"]) if aplus_data["product_information"] else None,
+                    product_information=(
+                        json.loads(aplus_data["product_information"])
+                        if aplus_data["product_information"]
+                        else None
+                    ),
                 )
 
             # Get A+ images
@@ -118,19 +112,21 @@ class DatabaseService:
                 .order("position")
                 .execute()
             )
-            
+
             for img in aplus_images_result.data:
-                aplus_images.append(AplusImage(
-                    original_url=img["original_url"],
-                    storage_path=img["storage_path"],
-                    width=img["width"],
-                    height=img["height"],
-                    position=img["position"],
-                    alt_text=img["alt_text"],
-                    image_type=img["image_type"],
-                    content_section=img["content_section"],
-                    status=img["status"],
-                ))
+                aplus_images.append(
+                    AplusImage(
+                        original_url=img["original_url"],
+                        storage_path=img["storage_path"],
+                        width=img["width"],
+                        height=img["height"],
+                        position=img["position"],
+                        alt_text=img["alt_text"],
+                        image_type=img["image_type"],
+                        content_section=img["content_section"],
+                        status=img["status"],
+                    )
+                )
 
             return ProductResponse(
                 id=product["id"],
@@ -154,8 +150,8 @@ class DatabaseService:
                 hero_image=hero_image,
                 gallery=gallery,
                 bullets=bullets,
-                attributes=attributes,
-                availability=product["availability"],
+                # 删除 attributes 字段
+                # 删除 availability 字段
                 best_sellers_rank=product["best_sellers_rank"],
                 aplus_content=aplus_content,
                 aplus_images=aplus_images,
@@ -171,19 +167,9 @@ class DatabaseService:
             return None
 
     async def upsert_product(self, scraped_data: ScrapedProduct) -> str:
-        """Insert or update product with all related data"""
+        """Insert or update product data"""
         try:
-            # Calculate etag
             etag = self._calculate_etag(scraped_data)
-
-            # Check if product exists
-            existing = (
-                self.client.table("amazon_products")
-                .select("id, etag")
-                .eq("asin", scraped_data.asin)
-                .eq("marketplace", scraped_data.marketplace)
-                .execute()
-            )
 
             product_data = {
                 "asin": scraped_data.asin,
@@ -194,16 +180,24 @@ class DatabaseService:
                 "price_amount": scraped_data.price_amount,
                 "price_currency": scraped_data.price_currency,
                 "hero_image_url": scraped_data.hero_image_url,
-                "availability": scraped_data.availability,
+                # 删除 availability 字段
                 "best_sellers_rank": scraped_data.best_sellers_rank,
-                "status": StatusEnum.FRESH,
+                "status": "fresh",
                 "etag": etag,
                 "last_scraped_at": datetime.utcnow().isoformat(),
                 "updated_at": datetime.utcnow().isoformat(),
             }
 
+            # Check if product exists
+            existing = (
+                self.client.table("amazon_products")
+                .select("id, etag")
+                .eq("asin", scraped_data.asin)
+                .eq("marketplace", scraped_data.marketplace)
+                .execute()
+            )
+
             if existing.data:
-                # Update existing product
                 product_id = existing.data[0]["id"]
 
                 # Only update if etag changed
@@ -242,7 +236,7 @@ class DatabaseService:
             raise
 
     async def _insert_related_data(self, product_id: str, scraped_data: ScrapedProduct):
-        """Insert bullets, images, attributes, and A+ content"""
+        """Insert bullets, images, and A+ content"""
         # Insert bullets
         if scraped_data.bullets:
             bullets_data = [
@@ -288,19 +282,7 @@ class DatabaseService:
         if images_data:
             self.client.table("amazon_product_images").insert(images_data).execute()
 
-        # Insert attributes
-        if scraped_data.attributes:
-            attrs_data = [
-                {
-                    "id": str(uuid.uuid4()),
-                    "product_id": product_id,
-                    "name": attr.name,
-                    "value": attr.value,
-                    "source": attr.source,
-                }
-                for attr in scraped_data.attributes
-            ]
-            self.client.table("amazon_product_attributes").insert(attrs_data).execute()
+        # 删除 attributes 插入逻辑
 
         # Insert A+ content
         if scraped_data.aplus_content:
@@ -308,8 +290,16 @@ class DatabaseService:
                 "id": str(uuid.uuid4()),
                 "product_id": product_id,
                 "brand_story": scraped_data.aplus_content.brand_story,
-                "faq": json.dumps(scraped_data.aplus_content.faq) if scraped_data.aplus_content.faq else None,
-                "product_information": json.dumps(scraped_data.aplus_content.product_information) if scraped_data.aplus_content.product_information else None,
+                "faq": (
+                    json.dumps(scraped_data.aplus_content.faq)
+                    if scraped_data.aplus_content.faq
+                    else None
+                ),
+                "product_information": (
+                    json.dumps(scraped_data.aplus_content.product_information)
+                    if scraped_data.aplus_content.product_information
+                    else None
+                ),
             }
             self.client.table("amazon_aplus_contents").insert(aplus_data).execute()
 
@@ -342,9 +332,7 @@ class DatabaseService:
         self.client.table("amazon_product_images").delete().eq(
             "product_id", product_id
         ).execute()
-        self.client.table("amazon_product_attributes").delete().eq(
-            "product_id", product_id
-        ).execute()
+        # 删除 attributes 删除逻辑
         self.client.table("amazon_aplus_contents").delete().eq(
             "product_id", product_id
         ).execute()
@@ -362,25 +350,43 @@ class DatabaseService:
             "rating": scraped_data.rating,
             "price_amount": scraped_data.price_amount,
             "bullets": scraped_data.bullets,
-            "attributes": [
-                {"name": attr.name, "value": attr.value}
-                for attr in scraped_data.attributes
-            ],
-            "aplus_content": {
-                "brand_story": scraped_data.aplus_content.brand_story if scraped_data.aplus_content else None,
-                "faq": scraped_data.aplus_content.faq if scraped_data.aplus_content else None,
-                "product_information": scraped_data.aplus_content.product_information if scraped_data.aplus_content else None,
-            } if scraped_data.aplus_content else None,
-            "aplus_images": [
+            # 删除 attributes 字段
+            "aplus_content": (
                 {
-                    "original_url": img.original_url,
-                    "position": img.position,
-                    "image_type": img.image_type,
-                    "content_section": img.content_section,
+                    "brand_story": (
+                        scraped_data.aplus_content.brand_story
+                        if scraped_data.aplus_content
+                        else None
+                    ),
+                    "faq": (
+                        scraped_data.aplus_content.faq
+                        if scraped_data.aplus_content
+                        else None
+                    ),
+                    "product_information": (
+                        scraped_data.aplus_content.product_information
+                        if scraped_data.aplus_content
+                        else None
+                    ),
                 }
-                for img in scraped_data.aplus_images
-            ] if scraped_data.aplus_images else [],
+                if scraped_data.aplus_content
+                else None
+            ),
+            "aplus_images": (
+                [
+                    {
+                        "original_url": img.original_url,
+                        "position": img.position,
+                        "image_type": img.image_type,
+                        "content_section": img.content_section,
+                    }
+                    for img in scraped_data.aplus_images
+                ]
+                if scraped_data.aplus_images
+                else []
+            ),
         }
+
         content_str = json.dumps(content, sort_keys=True)
         return hashlib.md5(content_str.encode()).hexdigest()
 
@@ -388,9 +394,8 @@ class DatabaseService:
         self, asin: str, marketplace: str, requested_by: Optional[str] = None
     ) -> str:
         """Create a new scraping task"""
-        task_id = str(uuid.uuid4())
         task_data = {
-            "id": task_id,
+            "id": str(uuid.uuid4()),
             "asin": asin,
             "marketplace": marketplace,
             "status": TaskStatusEnum.QUEUED,
@@ -399,21 +404,22 @@ class DatabaseService:
             "updated_at": datetime.utcnow().isoformat(),
         }
 
-        self.client.table("scrape_tasks").insert(task_data).execute()
-        return task_id
+        result = self.client.table("scrape_tasks").insert(task_data).execute()
+        return result.data[0]["id"]
 
     async def update_task_status(
         self, task_id: str, status: TaskStatusEnum, error: Optional[str] = None
     ):
         """Update task status"""
-        update_data = {"status": status, "updated_at": datetime.utcnow().isoformat()}
+        update_data = {
+            "status": status,
+            "updated_at": datetime.utcnow().isoformat(),
+        }
 
         if error:
             update_data["error"] = error
 
-        self.client.table("scrape_tasks").update(update_data).eq(
-            "id", task_id
-        ).execute()
+        self.client.table("scrape_tasks").update(update_data).eq("id", task_id).execute()
 
     async def get_task(self, task_id: str) -> Optional[TaskResponse]:
         """Get task by ID"""
@@ -425,7 +431,16 @@ class DatabaseService:
             return None
 
         task = result.data[0]
-        return TaskResponse(**task)
+        return TaskResponse(
+            id=task["id"],
+            asin=task["asin"],
+            marketplace=task["marketplace"],
+            status=task["status"],
+            error=task["error"],
+            requested_by=task["requested_by"],
+            created_at=task["created_at"],
+            updated_at=task["updated_at"],
+        )
 
     async def is_product_fresh(self, asin: str, marketplace: str) -> bool:
         """Check if product data is fresh (within TTL)"""

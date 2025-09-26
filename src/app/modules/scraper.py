@@ -283,7 +283,6 @@ class ScraperService:
             product = await self.db_service.get_product(asin, marketplace)
             if product and product.status == "fresh":
                 return product
-
             await asyncio.sleep(1)
 
         return None

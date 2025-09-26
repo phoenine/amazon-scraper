@@ -4,7 +4,7 @@ import logging
 from typing import Optional, List, Dict, Any
 from playwright.async_api import Page
 
-from .models import ScrapedProduct, ProductAttribute, AttributeSourceEnum
+from .models import ScrapedProduct
 
 logger = logging.getLogger(__name__)
 
@@ -30,22 +30,12 @@ class AmazonParser:
             "hero_image": "#imgTagWrapperId img",
             "gallery_images": "#altImages img",
             "bullets": "#feature-bullets ul li span",
-            "availability": "#availability span",
-            "tech_details": "#productDetails_techSpec_section_1 tr",
-            "product_details": "#productDetails_detailBullets_sections1 tr, #detailBullets_feature_div tr",
         }
 
-        # Marketplace-specific adjustments
         if marketplace == "amazon.co.jp":
             base_selectors.update(
                 {
                     "price": ".a-price .a-offscreen, #corePrice_desktop .a-offscreen",
-                }
-            )
-        elif marketplace == "amazon.de":
-            base_selectors.update(
-                {
-                    "availability": "#availability span, #availability-brief",
                 }
             )
 
@@ -56,8 +46,9 @@ class AmazonParser:
         logger.info(f"Parsing product {asin} from {self.marketplace}")
 
         try:
-            # Wait for page to load
-            await page.wait_for_load_state("domcontentloaded")
+
+            await page.wait_for_load_state("domcontentloaded", timeout=10000)
+            #! 这里可以优化下
             await page.wait_for_timeout(2000)  # Additional wait for dynamic content
 
             # Extract all product information
@@ -65,10 +56,8 @@ class AmazonParser:
             rating, ratings_count = await self._extract_rating_info(page)
             price_amount, price_currency = await self._extract_price(page)
             hero_image_url = await self._extract_hero_image(page)
-            availability = await self._extract_availability(page)
             bullets = await self._extract_bullets(page)
             gallery_images = await self._extract_gallery_images(page)
-            attributes = await self._extract_attributes(page)
             best_sellers_rank = await self._extract_bsr(page)
 
             # Get raw HTML for debugging (optional)
@@ -83,10 +72,8 @@ class AmazonParser:
                 price_amount=price_amount,
                 price_currency=price_currency,
                 hero_image_url=hero_image_url,
-                availability=availability,
                 bullets=bullets,
                 gallery_images=gallery_images,
-                attributes=attributes,
                 best_sellers_rank=best_sellers_rank,
                 raw_html=raw_html[:10000] if raw_html else None,  # Limit size
             )
@@ -178,9 +165,15 @@ class AmazonParser:
                     pass
 
         try:
-            currency_symbol = await self._safe_text(page, self.selectors.get("price_symbol", ""))
-            price_whole = await self._safe_text(page, self.selectors.get("price_whole", ""))
-            price_fraction = await self._safe_text(page, self.selectors.get("price_fraction", ""))
+            currency_symbol = await self._safe_text(
+                page, self.selectors.get("price_symbol", "")
+            )
+            price_whole = await self._safe_text(
+                page, self.selectors.get("price_whole", "")
+            )
+            price_fraction = await self._safe_text(
+                page, self.selectors.get("price_fraction", "")
+            )
 
             if price_whole:
                 num = price_whole.replace(",", "").strip()
@@ -216,10 +209,7 @@ class AmazonParser:
 
         return hero_url
 
-    async def _extract_availability(self, page: Page) -> Optional[str]:
-        """Extract availability information"""
-        availability = await self._safe_text(page, self.selectors["availability"])
-        return availability.strip() if availability else None
+    # 删除 _extract_availability 方法
 
     async def _extract_bullets(self, page: Page) -> List[str]:
         """Extract bullet points"""
@@ -258,58 +248,6 @@ class AmazonParser:
             logger.debug(f"Error extracting gallery images: {e}")
 
         return gallery[:10]  # Limit gallery images
-
-    async def _extract_attributes(self, page: Page) -> List[ProductAttribute]:
-        """Extract product attributes from tech details and product information"""
-        attributes = []
-
-        # Extract from tech details
-        await self._extract_attributes_from_section(
-            page,
-            self.selectors["tech_details"],
-            AttributeSourceEnum.TECH_DETAILS,
-            attributes,
-        )
-
-        # Extract from product details
-        await self._extract_attributes_from_section(
-            page,
-            self.selectors["product_details"],
-            AttributeSourceEnum.PRODUCT_INFORMATION,
-            attributes,
-        )
-
-        return attributes
-
-    async def _extract_attributes_from_section(
-        self,
-        page: Page,
-        selector: str,
-        source: AttributeSourceEnum,
-        attributes: List[ProductAttribute],
-    ):
-        """Extract attributes from a specific section"""
-        try:
-            rows = await page.query_selector_all(selector)
-            for row in rows:
-                cells = await row.query_selector_all("td")
-                if len(cells) >= 2:
-                    name_element = cells[0]
-                    value_element = cells[1]
-
-                    name = await name_element.text_content()
-                    value = await value_element.text_content()
-
-                    if name and value:
-                        name = " ".join(name.split()).strip()
-                        value = " ".join(value.split()).strip()
-
-                        if name and value:
-                            attributes.append(
-                                ProductAttribute(name=name, value=value, source=source)
-                            )
-        except Exception as e:
-            logger.debug(f"Error extracting attributes from {source}: {e}")
 
     async def _extract_bsr(self, page: Page) -> Optional[Dict[str, Any]]:
         """Extract Best Sellers Rank information"""

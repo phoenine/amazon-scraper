@@ -26,11 +26,6 @@ class ImageRoleEnum(str, Enum):
     HERO = "hero"
     GALLERY = "gallery"
 
-class AttributeSourceEnum(str, Enum):
-    TECH_DETAILS = "tech_details"
-    PRODUCT_INFORMATION = "product_information"
-
-# A+ Content Enums
 class AplusImageTypeEnum(str, Enum):
     DETAIL = "detail"
     SCENE = "scene"
@@ -64,11 +59,6 @@ class ImageInfo(BaseModel):
     height: Optional[int] = None
     position: Optional[int] = None
 
-class ProductAttribute(BaseModel):
-    name: str
-    value: str
-    source: AttributeSourceEnum
-
 # A+ Content Models
 class AplusContent(BaseModel):
     brand_story: Optional[str] = None
@@ -97,8 +87,6 @@ class ProductResponse(BaseModel):
     hero_image: Optional[ImageInfo] = None
     gallery: List[ImageInfo] = []
     bullets: List[str] = []
-    attributes: List[ProductAttribute] = []
-    availability: Optional[str] = None
     best_sellers_rank: Optional[Dict[str, Any]] = None
     aplus_content: Optional[AplusContent] = None
     aplus_images: List[AplusImage] = []
@@ -128,11 +116,9 @@ class ScrapedProduct(BaseModel):
     price_amount: Optional[float] = None
     price_currency: Optional[str] = None
     hero_image_url: Optional[str] = None
-    availability: Optional[str] = None
     best_sellers_rank: Optional[Dict[str, Any]] = None
     bullets: List[str] = []
     gallery_images: List[Dict[str, Any]] = []
-    attributes: List[ProductAttribute] = []
     aplus_content: Optional[AplusContent] = None
     aplus_images: List[AplusImage] = []
     raw_html: Optional[str] = None

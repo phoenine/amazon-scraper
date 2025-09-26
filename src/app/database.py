@@ -34,7 +34,6 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 
-# 便利函数，直接使用settings中的方法
 def get_database_url():
     """获取数据库连接URL - 委托给settings"""
     return settings.get_database_url()
@@ -53,11 +52,7 @@ class AmazonProduct(Base):
     price_currency = Column(String(3))
     hero_image_url = Column(Text)
     hero_image_path = Column(Text)
-    availability = Column(Text)
     best_sellers_rank = Column(JSON)
-    raw_html_snapshot_id = Column(
-        UUID(as_uuid=True), ForeignKey("amazon_html_snapshots.id")
-    )
     status = Column(String, nullable=False, default="pending")
     etag = Column(String)
     last_scraped_at = Column(DateTime(timezone=True))
@@ -73,9 +68,7 @@ class AmazonProduct(Base):
     images = relationship(
         "AmazonProductImage", back_populates="product", cascade="all, delete-orphan"
     )
-    attributes = relationship(
-        "AmazonProductAttribute", back_populates="product", cascade="all, delete-orphan"
-    )
+
     aplus_content = relationship(
         "AmazonAplusContent",
         back_populates="product",
@@ -85,7 +78,6 @@ class AmazonProduct(Base):
     aplus_images = relationship(
         "AmazonAplusImage", back_populates="product", cascade="all, delete-orphan"
     )
-    html_snapshot = relationship("AmazonHtmlSnapshot", back_populates="products")
 
     # 约束
     __table_args__ = (
@@ -129,24 +121,6 @@ class AmazonProductImage(Base):
 
     # 关系
     product = relationship("AmazonProduct", back_populates="images")
-
-
-class AmazonProductAttribute(Base):
-    __tablename__ = "amazon_product_attributes"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    product_id = Column(
-        UUID(as_uuid=True),
-        ForeignKey("amazon_products.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    name = Column(String, nullable=False)
-    value = Column(Text, nullable=False)
-    source = Column(String, nullable=False)  # 'tech_details' or 'product_information'
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    # 关系
-    product = relationship("AmazonProduct", back_populates="attributes")
 
 
 class AmazonAplusContent(Base):
@@ -214,22 +188,6 @@ class AmazonAplusImage(Base):
             "status IN ('pending', 'stored', 'failed')", name="ck_aplus_image_status"
         ),
     )
-
-
-class AmazonHtmlSnapshot(Base):
-    __tablename__ = "amazon_html_snapshots"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    asin = Column(String, nullable=False)
-    marketplace = Column(String, nullable=False)
-    html = Column(Text)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
-
-    # 关系
-    products = relationship("AmazonProduct", back_populates="html_snapshot")
 
 
 class ScrapeTask(Base):

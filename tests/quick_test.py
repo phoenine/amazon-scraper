@@ -10,33 +10,31 @@ from dotenv import load_dotenv
 # 加载环境变量
 load_dotenv()
 
+# 添加项目根目录到 Python 路径
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 
 async def test_parser():
-    """测试解析器功能"""
-    print("🧪 测试Amazon解析器...")
+    """测试解析器"""
+    print("🔍 测试 Amazon 解析器...")
 
     try:
-        from app.parser import AmazonParser
+        from src.app.modules.parser import AmazonParser
         from playwright.async_api import async_playwright
 
-        # 创建解析器
-        parser = AmazonParser("amazon.com")
+        test_asin = "B08N5WRWNW"  # Echo Dot
+        test_url = f"https://www.amazon.com/dp/{test_asin}"
 
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=False)  # 显示浏览器便于调试
-            context = await browser.new_context(
-                user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
-            )
-            page = await context.new_page()
+            print("🌐 启动浏览器...")
+            browser = await p.chromium.launch(headless=True)
+            page = await browser.new_page()
 
-            # 测试一个真实的Amazon产品页面
-            test_asin = "B08N5WRWNW"  # Echo Dot (4th Gen)
-            url = f"https://amazon.com/dp/{test_asin}"
+            print(f"📄 访问页面: {test_url}")
+            await page.goto(test_url, wait_until="networkidle")
 
-            print(f"📄 访问页面: {url}")
-            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            parser = AmazonParser("amazon.com")
 
-            # 解析产品信息
             print("🔍 解析产品信息...")
             product = await parser.parse_product(page, test_asin)
 
@@ -51,7 +49,8 @@ async def test_parser():
                 else "🖼️  主图: 未找到"
             )
             print(f"📝 要点数量: {len(product.bullets)}")
-            print(f"🏷️  属性数量: {len(product.attributes)}")
+            # 删除属性数量显示
+            # print(f"🏷️  属性数量: {len(product.attributes)}")
 
             await browser.close()
 
@@ -67,51 +66,41 @@ async def test_database():
     print("\n🗄️  测试数据库连接...")
 
     try:
-        from app.store import DatabaseService
+        from src.app.modules.store import DatabaseService
 
         db = DatabaseService()
 
-        # 测试连接
-        result = (
-            db.client.table("amazon_products").select("count", count="exact").execute()
-        )
-        print(f"✅ 数据库连接成功! 当前产品数量: {result.count}")
+        # 测试获取不存在的产品
+        product = await db.get_product("TEST123", "amazon.com")
+        if product is None:
+            print("✅ 数据库连接正常 (未找到测试产品)")
+        else:
+            print("⚠️  找到了测试产品")
 
     except Exception as e:
-        print(f"❌ 数据库连接失败: {e}")
-        print("💡 请检查 .env 文件中的Supabase配置")
+        print(f"❌ 数据库测试失败: {e}")
         return False
 
     return True
 
 
 async def main():
-    """主测试函数"""
-    print("🚀 Amazon产品抓取器 - 快速测试")
-    print("=" * 50)
+    """运行所有测试"""
+    print("🧪 开始快速测试...\n")
 
-    # 检查环境变量
-    required_vars = ["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"]
-    missing_vars = [var for var in required_vars if not os.getenv(var)]
+    # 运行解析器测试
+    parser_result = await test_parser()
 
-    if missing_vars:
-        print(f"❌ 缺少环境变量: {', '.join(missing_vars)}")
-        print("💡 请复制 .env.example 为 .env 并填入正确的配置")
-        return
+    # 运行数据库测试
+    db_result = await test_database()
 
-    # 测试数据库
-    db_ok = await test_database()
-    if not db_ok:
-        return
-
-    # 测试解析器
-    parser_ok = await test_parser()
-
-    if parser_ok:
+    # 总结
+    if parser_result and db_result:
         print("\n🎉 所有测试通过!")
-        print("🚀 可以启动服务器: python run.py")
+        return True
     else:
-        print("\n❌ 测试失败，请检查配置")
+        print("\n❌ 部分测试失败")
+        return False
 
 
 if __name__ == "__main__":
