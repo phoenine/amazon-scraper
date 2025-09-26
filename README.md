@@ -52,4 +52,5 @@ SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
 
 1. `migrations/001_create_tables.sql` - 创建数据表
 2. `migrations/002_create_storage.sql` - 创建存储桶
-3. `migrations/003_create_
+3. `migrations/003_add_aplus_content.sql` - 创建A+内容表
+4. `migrations/004_create_rls.sql` - 设置行级安全策略

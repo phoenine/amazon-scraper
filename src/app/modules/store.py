@@ -12,6 +12,9 @@ from .models import (
     ScrapedProduct,
     TaskStatusEnum,
     StatusEnum,
+    AplusContent,
+    AplusImage,
+    AplusImageStatusEnum,
 )
 
 
@@ -89,6 +92,46 @@ class DatabaseService:
                 for attr in attrs_result.data
             ]
 
+            # Get A+ content
+            aplus_content = None
+            aplus_content_result = (
+                self.client.table("amazon_aplus_contents")
+                .select("*")
+                .eq("product_id", product_id)
+                .execute()
+            )
+            
+            if aplus_content_result.data:
+                aplus_data = aplus_content_result.data[0]
+                aplus_content = AplusContent(
+                    brand_story=aplus_data["brand_story"],
+                    faq=json.loads(aplus_data["faq"]) if aplus_data["faq"] else None,
+                    product_information=json.loads(aplus_data["product_information"]) if aplus_data["product_information"] else None,
+                )
+
+            # Get A+ images
+            aplus_images = []
+            aplus_images_result = (
+                self.client.table("amazon_aplus_images")
+                .select("*")
+                .eq("product_id", product_id)
+                .order("position")
+                .execute()
+            )
+            
+            for img in aplus_images_result.data:
+                aplus_images.append(AplusImage(
+                    original_url=img["original_url"],
+                    storage_path=img["storage_path"],
+                    width=img["width"],
+                    height=img["height"],
+                    position=img["position"],
+                    alt_text=img["alt_text"],
+                    image_type=img["image_type"],
+                    content_section=img["content_section"],
+                    status=img["status"],
+                ))
+
             return ProductResponse(
                 id=product["id"],
                 asin=product["asin"],
@@ -114,6 +157,8 @@ class DatabaseService:
                 attributes=attributes,
                 availability=product["availability"],
                 best_sellers_rank=product["best_sellers_rank"],
+                aplus_content=aplus_content,
+                aplus_images=aplus_images,
                 status=product["status"],
                 etag=product["etag"],
                 last_scraped_at=product["last_scraped_at"],
@@ -197,7 +242,7 @@ class DatabaseService:
             raise
 
     async def _insert_related_data(self, product_id: str, scraped_data: ScrapedProduct):
-        """Insert bullets, images, and attributes"""
+        """Insert bullets, images, attributes, and A+ content"""
         # Insert bullets
         if scraped_data.bullets:
             bullets_data = [
@@ -257,6 +302,37 @@ class DatabaseService:
             ]
             self.client.table("amazon_product_attributes").insert(attrs_data).execute()
 
+        # Insert A+ content
+        if scraped_data.aplus_content:
+            aplus_data = {
+                "id": str(uuid.uuid4()),
+                "product_id": product_id,
+                "brand_story": scraped_data.aplus_content.brand_story,
+                "faq": json.dumps(scraped_data.aplus_content.faq) if scraped_data.aplus_content.faq else None,
+                "product_information": json.dumps(scraped_data.aplus_content.product_information) if scraped_data.aplus_content.product_information else None,
+            }
+            self.client.table("amazon_aplus_contents").insert(aplus_data).execute()
+
+        # Insert A+ images
+        if scraped_data.aplus_images:
+            aplus_images_data = [
+                {
+                    "id": str(uuid.uuid4()),
+                    "product_id": product_id,
+                    "original_url": img.original_url,
+                    "storage_path": img.storage_path,
+                    "width": img.width,
+                    "height": img.height,
+                    "position": img.position,
+                    "alt_text": img.alt_text,
+                    "image_type": img.image_type,
+                    "content_section": img.content_section,
+                    "status": img.status,
+                }
+                for img in scraped_data.aplus_images
+            ]
+            self.client.table("amazon_aplus_images").insert(aplus_images_data).execute()
+
     async def _update_related_data(self, product_id: str, scraped_data: ScrapedProduct):
         """Update related data by deleting and reinserting"""
         # Delete existing related data
@@ -267,6 +343,12 @@ class DatabaseService:
             "product_id", product_id
         ).execute()
         self.client.table("amazon_product_attributes").delete().eq(
+            "product_id", product_id
+        ).execute()
+        self.client.table("amazon_aplus_contents").delete().eq(
+            "product_id", product_id
+        ).execute()
+        self.client.table("amazon_aplus_images").delete().eq(
             "product_id", product_id
         ).execute()
 
@@ -284,6 +366,20 @@ class DatabaseService:
                 {"name": attr.name, "value": attr.value}
                 for attr in scraped_data.attributes
             ],
+            "aplus_content": {
+                "brand_story": scraped_data.aplus_content.brand_story if scraped_data.aplus_content else None,
+                "faq": scraped_data.aplus_content.faq if scraped_data.aplus_content else None,
+                "product_information": scraped_data.aplus_content.product_information if scraped_data.aplus_content else None,
+            } if scraped_data.aplus_content else None,
+            "aplus_images": [
+                {
+                    "original_url": img.original_url,
+                    "position": img.position,
+                    "image_type": img.image_type,
+                    "content_section": img.content_section,
+                }
+                for img in scraped_data.aplus_images
+            ] if scraped_data.aplus_images else [],
         }
         content_str = json.dumps(content, sort_keys=True)
         return hashlib.md5(content_str.encode()).hexdigest()

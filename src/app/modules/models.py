@@ -30,6 +30,19 @@ class AttributeSourceEnum(str, Enum):
     TECH_DETAILS = "tech_details"
     PRODUCT_INFORMATION = "product_information"
 
+# A+ Content Enums
+class AplusImageTypeEnum(str, Enum):
+    DETAIL = "detail"
+    SCENE = "scene"
+    LIFESTYLE = "lifestyle"
+    COMPARISON = "comparison"
+    INFOGRAPHIC = "infographic"
+
+class AplusImageStatusEnum(str, Enum):
+    PENDING = "pending"
+    STORED = "stored"
+    FAILED = "failed"
+
 # Request Models
 class ScrapeItem(BaseModel):
     asin: str = Field(..., description="Amazon Standard Identification Number")
@@ -56,6 +69,23 @@ class ProductAttribute(BaseModel):
     value: str
     source: AttributeSourceEnum
 
+# A+ Content Models
+class AplusContent(BaseModel):
+    brand_story: Optional[str] = None
+    faq: Optional[List[Dict[str, str]]] = None  # List of question-answer pairs
+    product_information: Optional[Dict[str, Any]] = None  # Key-value pairs
+
+class AplusImage(BaseModel):
+    original_url: str
+    storage_path: Optional[str] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    position: int
+    alt_text: Optional[str] = None
+    image_type: Optional[AplusImageTypeEnum] = None
+    content_section: Optional[str] = None  # brand_story, faq, product_info, etc.
+    status: AplusImageStatusEnum = AplusImageStatusEnum.PENDING
+
 class ProductResponse(BaseModel):
     id: str
     asin: str
@@ -70,6 +100,8 @@ class ProductResponse(BaseModel):
     attributes: List[ProductAttribute] = []
     availability: Optional[str] = None
     best_sellers_rank: Optional[Dict[str, Any]] = None
+    aplus_content: Optional[AplusContent] = None
+    aplus_images: List[AplusImage] = []
     status: StatusEnum
     etag: Optional[str] = None
     last_scraped_at: Optional[datetime] = None
@@ -101,4 +133,6 @@ class ScrapedProduct(BaseModel):
     bullets: List[str] = []
     gallery_images: List[Dict[str, Any]] = []
     attributes: List[ProductAttribute] = []
+    aplus_content: Optional[AplusContent] = None
+    aplus_images: List[AplusImage] = []
     raw_html: Optional[str] = None

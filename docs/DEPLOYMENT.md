@@ -31,7 +31,8 @@ playwright install chromium
 ```sql
 -- 1. 执行 migrations/001_create_tables.sql
 -- 2. 执行 migrations/002_create_storage.sql
--- 3. 执行 migrations/003_create_rls.sql
+-- 3. 执行 migrations/003_add_aplus_content.sql
+-- 4. 执行 migrations/004_create_rls.sql
 ```
 
 #### 2.3 配置环境变量

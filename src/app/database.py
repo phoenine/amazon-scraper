@@ -15,6 +15,7 @@ from sqlalchemy import (
     JSON,
     ForeignKey,
     UniqueConstraint,
+    CheckConstraint,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.declarative import declarative_base
@@ -74,6 +75,15 @@ class AmazonProduct(Base):
     )
     attributes = relationship(
         "AmazonProductAttribute", back_populates="product", cascade="all, delete-orphan"
+    )
+    aplus_content = relationship(
+        "AmazonAplusContent",
+        back_populates="product",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+    aplus_images = relationship(
+        "AmazonAplusImage", back_populates="product", cascade="all, delete-orphan"
     )
     html_snapshot = relationship("AmazonHtmlSnapshot", back_populates="products")
 
@@ -137,6 +147,73 @@ class AmazonProductAttribute(Base):
 
     # 关系
     product = relationship("AmazonProduct", back_populates="attributes")
+
+
+class AmazonAplusContent(Base):
+    __tablename__ = "amazon_aplus_contents"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    product_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("amazon_products.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+
+    # A+ content fields
+    brand_story = Column(Text)
+    faq = Column(JSON)  # JSON array of question-answer pairs
+    product_information = Column(JSON)  # JSON object of key-value pairs
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    # 关系
+    product = relationship("AmazonProduct", back_populates="aplus_content")
+
+
+class AmazonAplusImage(Base):
+    __tablename__ = "amazon_aplus_images"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    product_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("amazon_products.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    # Image basic info (following amazon_product_images pattern)
+    original_url = Column(Text, nullable=False)
+    storage_path = Column(Text)
+    width = Column(Integer)
+    height = Column(Integer)
+    position = Column(Integer, nullable=False)
+
+    # A+ specific fields
+    alt_text = Column(Text)
+    image_type = Column(String)
+    content_section = Column(Text)  # brand_story, faq, product_info, etc.
+
+    # Status management (simplified)
+    status = Column(String, nullable=False, default="pending")
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # 关系
+    product = relationship("AmazonProduct", back_populates="aplus_images")
+
+    # 约束
+    __table_args__ = (
+        CheckConstraint(
+            "image_type IN ('detail', 'scene', 'lifestyle', 'comparison', 'infographic')",
+            name="ck_aplus_image_type",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'stored', 'failed')", name="ck_aplus_image_status"
+        ),
+    )
 
 
 class AmazonHtmlSnapshot(Base):
