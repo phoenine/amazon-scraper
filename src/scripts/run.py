@@ -17,5 +17,5 @@ if __name__ == "__main__":
     os.environ.setdefault("PYTHONPATH", str(project_root))
 
     uvicorn.run(
-        "src.app.main:app", host="0.0.0.0", port=18000, reload=True, log_level="info"
+        "src.app.main:app", host="0.0.0.0", port=18000, reload=True, log_level="debug"
     )

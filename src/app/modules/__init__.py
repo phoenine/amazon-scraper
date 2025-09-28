@@ -7,7 +7,7 @@ from .parser import AmazonParser
 from .scraper import ScraperService
 from .store import DatabaseService
 from .workers import WorkerManager
-from .image_service import ImageService
+from ..utils.image_service import ImageService
 
 __all__ = [
     "AmazonParser",

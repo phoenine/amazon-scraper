@@ -50,8 +50,7 @@ class AmazonProduct(Base):
     ratings_count = Column(Integer)
     price_amount = Column(Float)
     price_currency = Column(String(3))
-    hero_image_url = Column(Text)
-    hero_image_path = Column(Text)
+    # 移除 hero_image_url 和 hero_image_path 字段
     best_sellers_rank = Column(JSON)
     status = Column(String, nullable=False, default="pending")
     etag = Column(String)

@@ -7,7 +7,7 @@ from ..config import settings
 from .scraper import ScraperService
 from .store import DatabaseService
 from .models import TaskStatusEnum
-from .image_service import ImageService
+from ..utils.image_service import ImageService
 
 logger = logging.getLogger(__name__)
 
@@ -120,17 +120,21 @@ class WorkerManager:
                     asin, marketplace
                 )
 
-                # Save to database
-                product_id = await self.db_service.upsert_product(scraped_data)
+                # Save to database and check if content changed
+                product_id, content_changed = await self.db_service.upsert_product(scraped_data)
 
                 logger.info(
-                    f"{worker_name} successfully scraped {asin} -> {product_id}"
+                    f"{worker_name} successfully scraped {asin} -> {product_id}, content_changed: {content_changed}"
                 )
 
-                # Download and store images
-                await self._download_product_images(
-                    worker_name, product_id, scraped_data
-                )
+                # Only download images if content changed
+                if content_changed:
+                    logger.info(f"{worker_name} content changed, downloading images for {asin}")
+                    await self._download_product_images(
+                        worker_name, product_id, scraped_data
+                    )
+                else:
+                    logger.info(f"{worker_name} content unchanged, skipping image download for {asin}")
 
                 # Update task status to success
                 if task_id:

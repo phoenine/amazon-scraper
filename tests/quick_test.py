@@ -43,6 +43,7 @@ async def test_parser():
             print(f"📦 标题: {product.title}")
             print(f"⭐ 评分: {product.rating}")
             print(f"💰 价格: ${product.price_amount} {product.price_currency}")
+            # 修改：从 hero_image_url 改为检查是否有 hero_image_url（ScrapedProduct模型中仍有此字段）
             print(
                 f"🖼️  主图: {product.hero_image_url[:50]}..."
                 if product.hero_image_url

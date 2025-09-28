@@ -2,7 +2,7 @@ import uuid
 import hashlib
 import json
 from datetime import datetime, timedelta, timezone
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from supabase import create_client, Client
 
 from ..config import settings
@@ -80,8 +80,6 @@ class DatabaseService:
                 else:
                     gallery.append(img_info)
 
-            # 删除 attributes 查询逻辑
-
             # Get A+ content
             aplus_content = None
             aplus_content_result = (
@@ -150,8 +148,6 @@ class DatabaseService:
                 hero_image=hero_image,
                 gallery=gallery,
                 bullets=bullets,
-                # 删除 attributes 字段
-                # 删除 availability 字段
                 best_sellers_rank=product["best_sellers_rank"],
                 aplus_content=aplus_content,
                 aplus_images=aplus_images,
@@ -166,8 +162,8 @@ class DatabaseService:
             print(f"Error getting product: {e}")
             return None
 
-    async def upsert_product(self, scraped_data: ScrapedProduct) -> str:
-        """Insert or update product data"""
+    async def upsert_product(self, scraped_data: ScrapedProduct) -> Tuple[str, bool]:
+        """Insert or update product data, returns (product_id, content_changed)"""
         try:
             etag = self._calculate_etag(scraped_data)
 
@@ -179,8 +175,6 @@ class DatabaseService:
                 "ratings_count": scraped_data.ratings_count,
                 "price_amount": scraped_data.price_amount,
                 "price_currency": scraped_data.price_currency,
-                "hero_image_url": scraped_data.hero_image_url,
-                # 删除 availability 字段
                 "best_sellers_rank": scraped_data.best_sellers_rank,
                 "status": "fresh",
                 "etag": etag,
@@ -197,27 +191,39 @@ class DatabaseService:
                 .execute()
             )
 
+            content_changed = True  # 默认认为内容有变化
+
             if existing.data:
                 product_id = existing.data[0]["id"]
 
-                # Only update if etag changed
+                # 情况3：ETag变化了，需要更新所有信息包括A+
                 if existing.data[0]["etag"] != etag:
                     self.client.table("amazon_products").update(product_data).eq(
                         "id", product_id
                     ).execute()
 
-                    # Delete and recreate related data
-                    await self._update_related_data(product_id, scraped_data)
+                    # 删除并重建所有相关数据，包括A+内容
+                    await self._update_related_data(
+                        product_id, scraped_data, include_aplus=True
+                    )
+                    content_changed = True
                 else:
-                    # Just update last_scraped_at
+                    # 情况1：ETag没有变化，只更新时间戳和可变字段，不更新A+
+                    variable_fields_data = {
+                        "rating": scraped_data.rating,
+                        "ratings_count": scraped_data.ratings_count,
+                        "price_amount": scraped_data.price_amount,
+                        "price_currency": scraped_data.price_currency,
+                        "best_sellers_rank": scraped_data.best_sellers_rank,
+                        "last_scraped_at": datetime.utcnow().isoformat(),
+                        "updated_at": datetime.utcnow().isoformat(),
+                    }
                     self.client.table("amazon_products").update(
-                        {
-                            "last_scraped_at": datetime.utcnow().isoformat(),
-                            "updated_at": datetime.utcnow().isoformat(),
-                        }
+                        variable_fields_data
                     ).eq("id", product_id).execute()
+                    content_changed = False  # 核心内容没有变化
             else:
-                # Insert new product
+                # 情况2：新数据，需要更新所有信息包括A+
                 product_data["id"] = str(uuid.uuid4())
                 product_data["created_at"] = datetime.utcnow().isoformat()
 
@@ -226,17 +232,22 @@ class DatabaseService:
                 )
                 product_id = result.data[0]["id"]
 
-                # Insert related data
-                await self._insert_related_data(product_id, scraped_data)
+                # 插入所有相关数据，包括A+内容
+                await self._insert_related_data(
+                    product_id, scraped_data, include_aplus=True
+                )
+                content_changed = True
 
-            return product_id
+            return product_id, content_changed
 
         except Exception as e:
             print(f"Error upserting product: {e}")
             raise
 
-    async def _insert_related_data(self, product_id: str, scraped_data: ScrapedProduct):
-        """Insert bullets, images, and A+ content"""
+    async def _insert_related_data(
+        self, product_id: str, scraped_data: ScrapedProduct, include_aplus: bool = True
+    ):
+        """Insert bullets, images, and optionally A+ content"""
         # Insert bullets
         if scraped_data.bullets:
             bullets_data = [
@@ -253,7 +264,7 @@ class DatabaseService:
         # Insert images
         images_data = []
 
-        # Hero image
+        # Hero image - 现在存储在 amazon_product_images 表中
         if scraped_data.hero_image_url:
             images_data.append(
                 {
@@ -282,8 +293,12 @@ class DatabaseService:
         if images_data:
             self.client.table("amazon_product_images").insert(images_data).execute()
 
-        # 删除 attributes 插入逻辑
+        # Insert A+ content only if include_aplus is True
+        if include_aplus:
+            await self._insert_aplus_data(product_id, scraped_data)
 
+    async def _insert_aplus_data(self, product_id: str, scraped_data: ScrapedProduct):
+        """Insert A+ content and images"""
         # Insert A+ content
         if scraped_data.aplus_content:
             aplus_data = {
@@ -323,68 +338,39 @@ class DatabaseService:
             ]
             self.client.table("amazon_aplus_images").insert(aplus_images_data).execute()
 
-    async def _update_related_data(self, product_id: str, scraped_data: ScrapedProduct):
+    async def _update_related_data(
+        self, product_id: str, scraped_data: ScrapedProduct, include_aplus: bool = True
+    ):
         """Update related data by deleting and reinserting"""
-        # Delete existing related data
+        # Delete existing core data (always updated)
         self.client.table("amazon_product_bullets").delete().eq(
             "product_id", product_id
         ).execute()
         self.client.table("amazon_product_images").delete().eq(
             "product_id", product_id
         ).execute()
-        # 删除 attributes 删除逻辑
-        self.client.table("amazon_aplus_contents").delete().eq(
-            "product_id", product_id
-        ).execute()
-        self.client.table("amazon_aplus_images").delete().eq(
-            "product_id", product_id
-        ).execute()
+
+        # Delete A+ data only if include_aplus is True
+        if include_aplus:
+            self.client.table("amazon_aplus_contents").delete().eq(
+                "product_id", product_id
+            ).execute()
+            self.client.table("amazon_aplus_images").delete().eq(
+                "product_id", product_id
+            ).execute()
 
         # Insert new data
-        await self._insert_related_data(product_id, scraped_data)
+        await self._insert_related_data(product_id, scraped_data, include_aplus)
 
     def _calculate_etag(self, scraped_data: ScrapedProduct) -> str:
         """Calculate content hash for change detection"""
         content = {
             "title": scraped_data.title,
-            "rating": scraped_data.rating,
-            "price_amount": scraped_data.price_amount,
+            # "rating": scraped_data.rating,
+            # "price_amount": scraped_data.price_amount,
             "bullets": scraped_data.bullets,
-            # 删除 attributes 字段
-            "aplus_content": (
-                {
-                    "brand_story": (
-                        scraped_data.aplus_content.brand_story
-                        if scraped_data.aplus_content
-                        else None
-                    ),
-                    "faq": (
-                        scraped_data.aplus_content.faq
-                        if scraped_data.aplus_content
-                        else None
-                    ),
-                    "product_information": (
-                        scraped_data.aplus_content.product_information
-                        if scraped_data.aplus_content
-                        else None
-                    ),
-                }
-                if scraped_data.aplus_content
-                else None
-            ),
-            "aplus_images": (
-                [
-                    {
-                        "original_url": img.original_url,
-                        "position": img.position,
-                        "image_type": img.image_type,
-                        "content_section": img.content_section,
-                    }
-                    for img in scraped_data.aplus_images
-                ]
-                if scraped_data.aplus_images
-                else []
-            ),
+            "hero_image_url": scraped_data.hero_image_url,
+            "gallery_images": scraped_data.gallery_images,
         }
 
         content_str = json.dumps(content, sort_keys=True)
@@ -419,7 +405,9 @@ class DatabaseService:
         if error:
             update_data["error"] = error
 
-        self.client.table("scrape_tasks").update(update_data).eq("id", task_id).execute()
+        self.client.table("scrape_tasks").update(update_data).eq(
+            "id", task_id
+        ).execute()
 
     async def get_task(self, task_id: str) -> Optional[TaskResponse]:
         """Get task by ID"""

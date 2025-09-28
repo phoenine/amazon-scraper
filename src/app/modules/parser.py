@@ -5,16 +5,19 @@ from typing import Optional, List, Dict, Any
 from playwright.async_api import Page
 
 from .models import ScrapedProduct
+from ..utils.image_extractor import AmazonImageExtractor
 
 logger = logging.getLogger(__name__)
 
 
 class AmazonParser:
-    """Amazon product page parser"""
+    """Amazon产品页面解析器"""
 
-    def __init__(self, marketplace: str = "amazon.com"):
+    def __init__(self, page: Page, marketplace: str = "amazon.com"):
+        self.page = page
         self.marketplace = marketplace
         self.selectors = self._get_selectors_for_marketplace(marketplace)
+        self.image_extractor = AmazonImageExtractor(page, self.selectors)
 
     def _get_selectors_for_marketplace(self, marketplace: str) -> Dict[str, str]:
         """Get CSS selectors based on marketplace"""
@@ -27,8 +30,8 @@ class AmazonParser:
             "price_symbol": ".a-price .a-price-symbol",
             "price_whole": ".a-price .a-price-whole",
             "price_fraction": ".a-price .a-price-fraction",
-            "hero_image": "#imgTagWrapperId img",
-            "gallery_images": "#altImages img",
+            "hero_image": "#landingImage",
+            "gallery_images": "#altImages li.item.imageThumbnail img", # 缩略图
             "bullets": "#feature-bullets ul li span",
         }
 
@@ -42,22 +45,22 @@ class AmazonParser:
         return base_selectors
 
     async def parse_product(self, page: Page, asin: str) -> ScrapedProduct:
-        """Parse product page and extract all information"""
-        logger.info(f"Parsing product {asin} from {self.marketplace}")
-
+        """Parse Amazon product page and extract all relevant information"""
         try:
+            logger.info(f"开始解析产品: {asin}")
 
-            await page.wait_for_load_state("domcontentloaded", timeout=10000)
+            self.image_extractor.page = page
+
             #! 这里可以优化下
-            await page.wait_for_timeout(2000)  # Additional wait for dynamic content
+            await page.wait_for_timeout(2000)
 
             # Extract all product information
             title = await self._extract_title(page)
             rating, ratings_count = await self._extract_rating_info(page)
             price_amount, price_currency = await self._extract_price(page)
-            hero_image_url = await self._extract_hero_image(page)
+            hero_image_url = await self._extract_hero_image()
             bullets = await self._extract_bullets(page)
-            gallery_images = await self._extract_gallery_images(page)
+            gallery_images = await self._extract_gallery_images()
             best_sellers_rank = await self._extract_bsr(page)
 
             # Get raw HTML for debugging (optional)
@@ -72,14 +75,14 @@ class AmazonParser:
                 price_amount=price_amount,
                 price_currency=price_currency,
                 hero_image_url=hero_image_url,
-                bullets=bullets,
                 gallery_images=gallery_images,
+                bullets=bullets,
                 best_sellers_rank=best_sellers_rank,
-                raw_html=raw_html[:10000] if raw_html else None,  # Limit size
+                raw_html=raw_html,
             )
 
         except Exception as e:
-            logger.error(f"Error parsing product {asin}: {str(e)}")
+            logger.error(f"解析产品 {asin} 时出错: {e}")
             raise
 
     async def _safe_text(self, page: Page, selector: str) -> Optional[str]:
@@ -190,26 +193,13 @@ class AmazonParser:
 
         return None, None
 
-    async def _extract_hero_image(self, page: Page) -> Optional[str]:
-        """Extract hero image URL"""
-        # Try high-resolution image first
-        hero_url = await self._safe_attribute(
-            page, self.selectors["hero_image"], "data-old-hires"
-        )
-        if not hero_url:
-            hero_url = await self._safe_attribute(
-                page, self.selectors["hero_image"], "src"
-            )
+    async def _extract_hero_image(self) -> Optional[str]:
+        """提取主图片URL - 委托给图片提取器"""
+        return await self.image_extractor.extract_hero_image()
 
-        # Clean up URL and get high-res version
-        if hero_url:
-            # Replace small image indicators with large ones
-            hero_url = re.sub(r"_S[SX]\d+_", "_SL1500_", hero_url)
-            hero_url = re.sub(r"\._.*?\.", ".", hero_url)
-
-        return hero_url
-
-    # 删除 _extract_availability 方法
+    async def _extract_gallery_images(self) -> List[Dict[str, Any]]:
+        """提取画廊图片 - 委托给图片提取器"""
+        return await self.image_extractor.extract_gallery_images()
 
     async def _extract_bullets(self, page: Page) -> List[str]:
         """Extract bullet points"""
@@ -228,26 +218,6 @@ class AmazonParser:
             logger.debug(f"Error extracting bullets: {e}")
 
         return bullets[:5]  # Limit to 5 bullets as per requirement
-
-    async def _extract_gallery_images(self, page: Page) -> List[Dict[str, Any]]:
-        """Extract gallery images"""
-        gallery = []
-        try:
-            image_elements = await page.query_selector_all(
-                self.selectors["gallery_images"]
-            )
-            for idx, element in enumerate(image_elements):
-                src = await element.get_attribute("src")
-                if src:
-                    # Convert to high-res version
-                    high_res_src = re.sub(r"_S[SX]\d+_", "_SL1500_", src)
-                    gallery.append(
-                        {"url": high_res_src, "position": idx + 1, "role": "gallery"}
-                    )
-        except Exception as e:
-            logger.debug(f"Error extracting gallery images: {e}")
-
-        return gallery[:10]  # Limit gallery images
 
     async def _extract_bsr(self, page: Page) -> Optional[Dict[str, Any]]:
         """Extract Best Sellers Rank information"""
