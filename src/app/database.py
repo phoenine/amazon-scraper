@@ -50,7 +50,6 @@ class AmazonProduct(Base):
     ratings_count = Column(Integer)
     price_amount = Column(Float)
     price_currency = Column(String(3))
-    # 移除 hero_image_url 和 hero_image_path 字段
     best_sellers_rank = Column(JSON)
     status = Column(String, nullable=False, default="pending")
     etag = Column(String)
@@ -113,38 +112,11 @@ class AmazonProductImage(Base):
     role = Column(String, nullable=False)  # 'hero' or 'gallery'
     original_url = Column(Text, nullable=False)
     storage_path = Column(Text)
-    width = Column(Integer)
-    height = Column(Integer)
     position = Column(Integer, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # 关系
     product = relationship("AmazonProduct", back_populates="images")
-
-
-class AmazonAplusContent(Base):
-    __tablename__ = "amazon_aplus_contents"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    product_id = Column(
-        UUID(as_uuid=True),
-        ForeignKey("amazon_products.id", ondelete="CASCADE"),
-        nullable=False,
-        unique=True,
-    )
-
-    # A+ content fields
-    brand_story = Column(Text)
-    faq = Column(JSON)  # JSON array of question-answer pairs
-    product_information = Column(JSON)  # JSON object of key-value pairs
-
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
-
-    # 关系
-    product = relationship("AmazonProduct", back_populates="aplus_content")
 
 
 class AmazonAplusImage(Base):
@@ -156,22 +128,11 @@ class AmazonAplusImage(Base):
         ForeignKey("amazon_products.id", ondelete="CASCADE"),
         nullable=False,
     )
-
-    # Image basic info (following amazon_product_images pattern)
+    role = Column(String, nullable=False)  # 'brand_story' or 'aplus_detail'
+    position = Column(Integer, nullable=False)
     original_url = Column(Text, nullable=False)
     storage_path = Column(Text)
-    width = Column(Integer)
-    height = Column(Integer)
-    position = Column(Integer, nullable=False)
-
-    # A+ specific fields
-    alt_text = Column(Text)
-    image_type = Column(String)
-    content_section = Column(Text)  # brand_story, faq, product_info, etc.
-
-    # Status management (simplified)
     status = Column(String, nullable=False, default="pending")
-
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # 关系
@@ -180,11 +141,10 @@ class AmazonAplusImage(Base):
     # 约束
     __table_args__ = (
         CheckConstraint(
-            "image_type IN ('detail', 'scene', 'lifestyle', 'comparison', 'infographic')",
-            name="ck_aplus_image_type",
+            "status IN ('pending', 'stored', 'failed')", name="ck_aplus_image_status"
         ),
         CheckConstraint(
-            "status IN ('pending', 'stored', 'failed')", name="ck_aplus_image_status"
+            "role IN ('brand_story', 'aplus_detail')", name="ck_aplus_image_role"
         ),
     )
 
@@ -204,6 +164,27 @@ class ScrapeTask(Base):
     updated_at = Column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+class AmazonAplusContent(Base):
+    __tablename__ = "amazon_aplus_contents"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    product_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("amazon_products.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    brand_story = Column(Text)
+    faq = Column(Text)  # JSON string
+    product_information = Column(Text)  # JSON string
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    # 关系
+    product = relationship("AmazonProduct", back_populates="aplus_content")
 
 
 def get_db():

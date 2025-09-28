@@ -70,8 +70,6 @@ class DatabaseService:
                 img_info = {
                     "url": img["original_url"],
                     "storage_path": img["storage_path"],
-                    "width": img["width"],
-                    "height": img["height"],
                     "position": img["position"],
                 }
 
@@ -116,12 +114,8 @@ class DatabaseService:
                     AplusImage(
                         original_url=img["original_url"],
                         storage_path=img["storage_path"],
-                        width=img["width"],
-                        height=img["height"],
+                        role=img["role"],
                         position=img["position"],
-                        alt_text=img["alt_text"],
-                        image_type=img["image_type"],
-                        content_section=img["content_section"],
                         status=img["status"],
                     )
                 )
@@ -272,6 +266,7 @@ class DatabaseService:
                     "product_id": product_id,
                     "role": "hero",
                     "original_url": scraped_data.hero_image_url,
+                    "storage_path": None,  # 添加 storage_path 字段
                     "position": 0,
                 }
             )
@@ -284,9 +279,8 @@ class DatabaseService:
                     "product_id": product_id,
                     "role": "gallery",
                     "original_url": img.get("url"),
-                    "width": img.get("width"),
-                    "height": img.get("height"),
-                    "position": i + 1,
+                    "storage_path": img.get("storage_path"),  # 添加 storage_path 字段
+                    "position": i,  # 修改：使用 i 而不是 i + 1，从0开始
                 }
             )
 
@@ -326,12 +320,8 @@ class DatabaseService:
                     "product_id": product_id,
                     "original_url": img.original_url,
                     "storage_path": img.storage_path,
-                    "width": img.width,
-                    "height": img.height,
+                    "role": img.role,
                     "position": img.position,
-                    "alt_text": img.alt_text,
-                    "image_type": img.image_type,
-                    "content_section": img.content_section,
                     "status": img.status,
                 }
                 for img in scraped_data.aplus_images

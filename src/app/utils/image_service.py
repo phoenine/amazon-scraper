@@ -79,8 +79,8 @@ class ImageService:
                 gallery_img["url"],
                 scraped_data.asin,
                 scraped_data.marketplace,
-                gallery_img.get("role", "gallery"),
-                gallery_img.get("position", i),
+                "gallery",  # 统一使用 "gallery"
+                i,  # 使用 i，从0开始，与 store.py 保持一致
                 etag,  # 传入ETag
             )
             if gallery_result["success"]:
