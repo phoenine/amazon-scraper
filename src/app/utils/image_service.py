@@ -112,7 +112,7 @@ class ImageService:
     ) -> Dict[str, Any]:
         """下载并上传A+内容图片"""
         try:
-            image_url = aplus_img.get("url")
+            image_url = aplus_img.original_url
             if not image_url:
                 return {"success": False, "error": "缺少图片URL"}
 
@@ -123,7 +123,7 @@ class ImageService:
 
             # 生成存储路径 - 包含ETag
             file_extension = self._get_file_extension(image_url)
-            filename = f"aplus_{aplus_img.get('position', 0)}_{etag}{file_extension}"
+            filename = f"aplus_{aplus_img.position}_{etag}{file_extension}"
             storage_path = f"{marketplace}/{asin}/aplus/{filename}"
 
             # 清理旧文件并上传新文件
@@ -133,7 +133,7 @@ class ImageService:
                 asin,
                 marketplace,
                 "aplus",
-                aplus_img.get("position", 0),
+                aplus_img.position,
             )
 
             if upload_success:
@@ -141,8 +141,7 @@ class ImageService:
                     "success": True,
                     "storage_path": storage_path,
                     "original_url": image_url,
-                    "position": aplus_img.get("position", 0),
-                    "alt_text": aplus_img.get("alt_text", ""),
+                    "position": aplus_img.position,
                 }
             else:
                 return {

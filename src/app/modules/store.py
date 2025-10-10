@@ -271,7 +271,6 @@ class DatabaseService:
                 }
             )
 
-        # Gallery images
         for i, img in enumerate(scraped_data.gallery_images):
             images_data.append(
                 {
@@ -279,8 +278,8 @@ class DatabaseService:
                     "product_id": product_id,
                     "role": "gallery",
                     "original_url": img.get("url"),
-                    "storage_path": img.get("storage_path"),  # 添加 storage_path 字段
-                    "position": i,  # 修改：使用 i 而不是 i + 1，从0开始
+                    "storage_path": img.get("storage_path"),
+                    "position": i,
                 }
             )
 
